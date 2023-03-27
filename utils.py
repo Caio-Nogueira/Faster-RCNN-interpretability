@@ -77,36 +77,6 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
-# Load the dataset
-
-train_dataset = torchvision.datasets.VOCDetection(
-    root="./data", year="2012", image_set="train",
-    download=False, transform=transform)
-
-val_dataset = torchvision.datasets.VOCDetection(
-    root="./data", year="2012", image_set="val",
-    download=False, transform=transform)
-
-
-# Define the data loader
-train_data_loader = DataLoader(
-    train_dataset, batch_size=2, shuffle=False, num_workers=2,
-    collate_fn=collate_fn #handles variable length annotations - images with different number of bounding boxes
-)
-
-test_data_loader = DataLoader(
-    val_dataset, batch_size=2, shuffle=False, num_workers=2,
-    collate_fn=collate_fn 
-)
-
-# single_object_dataset = []
-
-# for img, annotation in tqdm(val_dataset):
-#     if (len(annotation["annotation"]["object"]) == 1): single_object_dataset.append((img,annotation))
-
-#write single_object_dataset to file
-# with open('single_object_dataset.pkl', 'rb') as f:
-#     single_object_dataset = pickle.load(f)
 
 
 def pick_random_image(data):
@@ -212,16 +182,6 @@ def remove_by_index(tensor, indices): #remove an element by index in a tensor
     return torch.index_select(tensor, 0, indices_to_keep)
 
 
-def is_box_contained(box1, box2):
-    """
-    Check if box1 is completely contained within box2.
-    box1 and box2 are tensors of shape (N, 4) containing the (x, y) coordinates of the top-left and bottom-right corners.
-    """
-    x1, y1, x2, y2 = box1.split(1, dim=1)
-    x3, y3, x4, y4 = box2.split(1, dim=1)
-    return torch.all((x1 >= x3) & (y1 >= y3) & (x2 <= x4) & (y2 <= y4), dim=1)
-
-
 def nms(model_output):
 
     keep = {"boxes": [], "labels": [], "scores": []}
@@ -298,3 +258,18 @@ def smooth_l1_loss(bbox_pred, bbox_target, beta=1.0):
     abs_diff = torch.abs(diff)
     smooth_l1 = torch.where(abs_diff < beta, 0.5 * abs_diff ** 2 / beta, abs_diff - 0.5 * beta)
     return smooth_l1.mean()
+
+
+def translate_bbox(bbox1, translation_vector):
+    translate_x = translation_vector[: , 0]
+    translate_y = translation_vector[: , 1]
+
+    if (len(bbox1.shape) == 1):
+        bbox1 = bbox1.unsqueeze(0)
+
+    bbox1[:, 0] += translate_x
+    bbox1[:, 1] += translate_y
+    bbox1[:, 2] += translate_x
+    bbox1[:, 3] += translate_y
+
+    return bbox1

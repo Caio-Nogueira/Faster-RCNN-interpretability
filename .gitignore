@@ -2,3 +2,5 @@ data/*
 __pycache__/*
 fasterrcnn_10epochs.pth
 single_object_dataset.pkl
+models/*
+test.py

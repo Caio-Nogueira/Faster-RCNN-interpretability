@@ -7,26 +7,28 @@ import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = torchvision.models.detection.fasterrcnn_resnet50_fpn(num_classes=21)
-model.load_state_dict(torch.load("fasterrcnn_10epochs.pth", map_location=device))
+model.load_state_dict(torch.load("models/fasterrcnn_10epochs.pth", map_location=device))
+model.to(device)
 
 
 img = None
 target_bbox = None
 
-with open('example_image_tensor.pkl', 'rb') as f1:
+with open('data/example_image_tensor.pkl', 'rb') as f1:
     img = torch.load(f1, map_location=device)
 
 
-with open('example_image_target.pkl', 'rb') as f2:
+with open('data/example_image_target.pkl', 'rb') as f2:
     target_bbox = torch.load(f2, map_location=device)
 
-model.to(device)
 model.eval()
-
 
 pred_bbox = model(img.unsqueeze(0))[0]['boxes'][0] # bbox with the highest score
 
-loss = utils.smooth_l1_loss(pred_bbox, target_bbox) # since we are dealing with single object, we can just use the first box
+copy_bbox = pred_bbox.clone().detach()
+contrastive = utils.translate_bbox(copy_bbox, np.array([[50,50]]))
+
+loss = utils.smooth_l1_loss(pred_bbox, contrastive) # since we are dealing with single object, we can just use the first box
 loss = loss.unsqueeze(0)
 
 
@@ -62,8 +64,6 @@ def compute_feature_maps(img):
 
     return img
 
-# print(fasterrcnn_reshape_transform(feature_maps).shape)
-
 feature_maps = compute_feature_maps(img) # (1, 2048, 12, 16)
 
 
@@ -74,7 +74,7 @@ for i, w in enumerate(weights):
     cam += w * feature_maps[0, i, :, :]
 
 
-cam = torch.abs(cam) # all values are negative (idk why) so we take the absolute value 
+cam = torch.abs(cam) # all values are negative so we take the absolute value 
 cam = cv2.resize(cam.detach().numpy(), (img.shape[2], img.shape[1]))
 cam = np.maximum(cam, 0)
 cam = cam / cam.max()
@@ -85,15 +85,20 @@ t_img = img.transpose((1, 2, 0))
 
 img = cv2.cvtColor(t_img, cv2.COLOR_RGB2BGR)
 
-heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_RAINBOW)
 
 t_heatmap = heatmap.astype(np.float32)
+t_heatmap = t_heatmap / 255
 
 # Overlay the heatmap on the input image
 output = cv2.addWeighted(img, 0.5, t_heatmap, 0.5, 0)
-output = cv2.rectangle(output, (int(target_bbox[0]), int(target_bbox[1])), (int(target_bbox[2]), int(target_bbox[3])), (0, 0, 0), 2)
 
-# cv2.imwrite("grad_cam_interpretation.jpg", output)
+output = cv2.rectangle(output, (int(pred_bbox[0]), int(pred_bbox[1])), (int(pred_bbox[2]), int(pred_bbox[3])), (0, 0, 255), 2)
+
+contrastive = contrastive.squeeze()
+output = cv2.rectangle(output, (int(contrastive[0]), int(contrastive[1])), (int(contrastive[2]), int(contrastive[3])), (0, 255, 0), 2)
+
+cv2.imwrite("grad_cam_interpretation.jpg", output * 255)
 # Display the output image
 cv2.imshow("Output", output)
 cv2.waitKey(0)
