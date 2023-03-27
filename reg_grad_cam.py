@@ -67,8 +67,6 @@ def compute_feature_maps(img):
 feature_maps = compute_feature_maps(img) # (1, 2048, 12, 16)
 
 
-# cam = torch.sum(weights * feature_maps, dim=(1,2), keepdim=True)
-
 cam = torch.zeros(feature_maps.shape[-2:], dtype=torch.float32)
 for i, w in enumerate(weights):
     cam += w * feature_maps[0, i, :, :]
@@ -78,6 +76,9 @@ cam = torch.abs(cam) # all values are negative so we take the absolute value
 cam = cv2.resize(cam.detach().numpy(), (img.shape[2], img.shape[1]))
 cam = np.maximum(cam, 0)
 cam = cam / cam.max()
+
+print(utils.average_cam(cam, pred_bbox))
+print(utils.average_cam(cam, contrastive))
 
 img = np.array(img)
 
@@ -90,6 +91,8 @@ heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_RAINBOW)
 t_heatmap = heatmap.astype(np.float32)
 t_heatmap = t_heatmap / 255
 
+
+
 # Overlay the heatmap on the input image
 output = cv2.addWeighted(img, 0.5, t_heatmap, 0.5, 0)
 
@@ -99,6 +102,7 @@ contrastive = contrastive.squeeze()
 output = cv2.rectangle(output, (int(contrastive[0]), int(contrastive[1])), (int(contrastive[2]), int(contrastive[3])), (0, 255, 0), 2)
 
 cv2.imwrite("grad_cam_interpretation.jpg", output * 255)
+
 # Display the output image
 cv2.imshow("Output", output)
 cv2.waitKey(0)

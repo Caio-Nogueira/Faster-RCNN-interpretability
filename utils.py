@@ -273,3 +273,18 @@ def translate_bbox(bbox1, translation_vector):
     bbox1[:, 3] += translate_y
 
     return bbox1
+
+
+def average_cam(cam, bbox):
+
+    if len(bbox.shape) > 1:
+        bbox = bbox.squeeze()
+
+    x1 = int(bbox[0].item())
+    y1 = int(bbox[1].item())
+    x2 = int(bbox[2].item())
+    y2 = int(bbox[3].item())
+
+    bbox_cam = cam[y1:y2, x1:x2]
+
+    return np.mean(bbox_cam)
