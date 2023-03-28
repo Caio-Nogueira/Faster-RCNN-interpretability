@@ -13,22 +13,23 @@ model.to(device)
 
 model.eval()
 
-img, target = utils.pick_random_image(utils.train_dataset)
+img, target = utils.pick_random_image(utils.train_dataset, seed=42)
 img = img[0].to(device)
 out = model(img.unsqueeze(0))
 utils.soft_nms(out)
 keep = utils.nms(out)
 
 detections = utils.assign_bbox(keep["boxes"], target[0]["boxes"])
-index = random.randint(0, detections.shape[0]-1) # get random element from detections 
+index = random.randint(0, detections.shape[0]) # get random element from detections 
 pred_bbox = detections[index]
 target_bbox = target[0]["boxes"][index]
 
+print(target[0]["labels"][index])
 
 copy_bbox = pred_bbox.clone().detach()
-contrastive = utils.translate_bbox(copy_bbox, np.array([[50,50]]))
+contrastive = utils.translate_bbox(copy_bbox, np.array([[50,-50]]))
 
-loss = utils.smooth_l1_loss(pred_bbox, target_bbox) # since we are dealing with single object, we can just use the first box
+loss = utils.smooth_l1_loss(pred_bbox, contrastive) # since we are dealing with single object, we can just use the first box
 loss = loss.unsqueeze(0)
 
 

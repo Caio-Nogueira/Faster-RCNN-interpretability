@@ -78,8 +78,9 @@ train_dataset = torchvision.datasets.VOCDetection(
     download=False, transform=ToTensor())
 
 
-def pick_random_image(data):
-    # random.seed(42)
+def pick_random_image(data, seed=None):
+    if seed is not None:
+        random.seed(seed)
     idx = random.randint(0, len(data))
     img, target = collate_fn([data[idx]])
     return img, target
