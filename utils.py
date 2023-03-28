@@ -72,15 +72,14 @@ def collate_fn(batch):
     return images, targets
 
 
-# Define the transformations to apply
-transform = transforms.Compose([
-    transforms.ToTensor()
-])
 
+train_dataset = torchvision.datasets.VOCDetection(
+    root="./data", year="2012", image_set="train",
+    download=False, transform=ToTensor())
 
 
 def pick_random_image(data):
-    random.seed(42)
+    # random.seed(42)
     idx = random.randint(0, len(data))
     img, target = collate_fn([data[idx]])
     return img, target
@@ -198,8 +197,10 @@ def nms(model_output):
         box = boxes[max_score_idx]
         score = scores[max_score_idx]
         label = labels[max_score_idx]
+        # print(f"Max score: {score}")
 
-        if score < 0.2: break 
+        if score < 0.2:
+            break
 
         selected_box = torch.stack([boxes[max_score_idx]])
         # selected_box_contained = False
@@ -222,7 +223,7 @@ def nms(model_output):
         boxes = (remove_by_index(boxes, inds))
         labels = (remove_by_index(labels, inds))
         scores = (remove_by_index(scores, inds))
-        # break
+
 
     keep["boxes"] = torch.stack(keep["boxes"])
     keep["labels"] = torch.stack(keep["labels"])
@@ -288,3 +289,22 @@ def average_cam(cam, bbox):
     bbox_cam = cam[y1:y2, x1:x2]
 
     return np.mean(bbox_cam)
+
+
+#for each detection assign a ground truth bbox
+def assign_bbox(detections, gt_bboxes, iou_threshold=0.5):
+    final_detections = []
+    
+    for object in gt_bboxes:
+
+        if len(object.shape) == 1: 
+            object = object.unsqueeze(0)
+        
+        iou_matrix = box_iou(object, detections)
+        max_iou, max_iou_idx = torch.max(iou_matrix, dim=1)
+
+        if max_iou > iou_threshold:
+            final_detections.append(detections[max_iou_idx])
+
+    # final detections and gt_bboxes are the same size and each index corresponds to the same object
+    return torch.stack(final_detections)

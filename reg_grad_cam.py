@@ -3,6 +3,7 @@ import torchvision
 import utils
 import cv2
 import numpy as np
+import random
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -10,32 +11,30 @@ model = torchvision.models.detection.fasterrcnn_resnet50_fpn(num_classes=21)
 model.load_state_dict(torch.load("models/fasterrcnn_10epochs.pth", map_location=device))
 model.to(device)
 
-
-img = None
-target_bbox = None
-
-with open('data/example_image_tensor.pkl', 'rb') as f1:
-    img = torch.load(f1, map_location=device)
-
-
-with open('data/example_image_target.pkl', 'rb') as f2:
-    target_bbox = torch.load(f2, map_location=device)
-
 model.eval()
 
-pred_bbox = model(img.unsqueeze(0))[0]['boxes'][0] # bbox with the highest score
+img, target = utils.pick_random_image(utils.train_dataset)
+img = img[0].to(device)
+out = model(img.unsqueeze(0))
+utils.soft_nms(out)
+keep = utils.nms(out)
+
+detections = utils.assign_bbox(keep["boxes"], target[0]["boxes"])
+index = random.randint(0, detections.shape[0]-1) # get random element from detections 
+pred_bbox = detections[index]
+target_bbox = target[0]["boxes"][index]
+
 
 copy_bbox = pred_bbox.clone().detach()
 contrastive = utils.translate_bbox(copy_bbox, np.array([[50,50]]))
 
-loss = utils.smooth_l1_loss(pred_bbox, contrastive) # since we are dealing with single object, we can just use the first box
+loss = utils.smooth_l1_loss(pred_bbox, target_bbox) # since we are dealing with single object, we can just use the first box
 loss = loss.unsqueeze(0)
 
 
 # Compute the gradients of the output with respect to the last convolutional layer
 grads = torch.autograd.grad(
     outputs=loss,
-    # inputs=model.backbone.fpn.layer_blocks[-1][0].weight, #last feature extraction conv layer
     inputs=model.backbone.body.layer4[-1].conv3.weight, #last feature extraction conv layer
     grad_outputs=torch.ones_like(loss),
     create_graph=True,
@@ -45,7 +44,6 @@ grads = torch.autograd.grad(
 grads = grads.squeeze()
 
 weights = torch.mean(grads, dim=1) # global average pooling shape=(2048,)
-
 
 
 def compute_feature_maps(img):
@@ -63,6 +61,7 @@ def compute_feature_maps(img):
     img = body.layer4(img)
 
     return img
+
 
 feature_maps = compute_feature_maps(img) # (1, 2048, 12, 16)
 
@@ -91,17 +90,18 @@ heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_RAINBOW)
 t_heatmap = heatmap.astype(np.float32)
 t_heatmap = t_heatmap / 255
 
-
-
 # Overlay the heatmap on the input image
 output = cv2.addWeighted(img, 0.5, t_heatmap, 0.5, 0)
+
+if len(pred_bbox.shape) > 1:
+    pred_bbox = pred_bbox.squeeze(0)
 
 output = cv2.rectangle(output, (int(pred_bbox[0]), int(pred_bbox[1])), (int(pred_bbox[2]), int(pred_bbox[3])), (0, 0, 255), 2)
 
 contrastive = contrastive.squeeze()
 output = cv2.rectangle(output, (int(contrastive[0]), int(contrastive[1])), (int(contrastive[2]), int(contrastive[3])), (0, 255, 0), 2)
 
-cv2.imwrite("grad_cam_interpretation.jpg", output * 255)
+cv2.imwrite("generated/grad_cam_interpretation3.jpg", output * 255)
 
 # Display the output image
 cv2.imshow("Output", output)

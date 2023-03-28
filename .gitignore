@@ -4,3 +4,4 @@ fasterrcnn_10epochs.pth
 single_object_dataset.pkl
 models/*
 test.py
+.vscode/*
