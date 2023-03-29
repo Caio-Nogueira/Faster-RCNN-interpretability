@@ -44,6 +44,10 @@ idx_to_label = {
 
 label_to_idx = {y:x for (x,y) in idx_to_label.items()}
 
+# train_dataset = torchvision.datasets.VOCDetection(
+#     root="./data", year="2012", image_set="train",
+#     download=True, transform=ToTensor)
+
 def collate_fn(batch):
     images = []
     targets = []
@@ -261,6 +265,10 @@ def smooth_l1_loss(bbox_pred, bbox_target, beta=1.0):
     smooth_l1 = torch.where(abs_diff < beta, 0.5 * abs_diff ** 2 / beta, abs_diff - 0.5 * beta)
     return smooth_l1.mean()
 
+def MSEloss(bbox1, bbox2):
+    return torch.mean((bbox1 - bbox2)**2)
+
+
 
 def translate_bbox(bbox1, translation_vector):
     translate_x = translation_vector[: , 0]
@@ -295,17 +303,22 @@ def average_cam(cam, bbox):
 #for each detection assign a ground truth bbox
 def assign_bbox(detections, gt_bboxes, iou_threshold=0.5):
     final_detections = []
+    final_targets = []
+
+    #sort detections by confidence score
+    # detections = sorted(detections, key=lambda x: x[4], reverse=True)
     
-    for object in gt_bboxes:
+    for bbox in detections["boxes"]:
+        if len(gt_bboxes) == 0:
+            break
 
-        if len(object.shape) == 1: 
-            object = object.unsqueeze(0)
-        
-        iou_matrix = box_iou(object, detections)
-        max_iou, max_iou_idx = torch.max(iou_matrix, dim=1)
+        iou_matrix = box_iou(bbox.unsqueeze(0), gt_bboxes)
 
-        if max_iou > iou_threshold:
-            final_detections.append(detections[max_iou_idx])
+        iou_max, iou_max_idx = torch.max(iou_matrix, dim=1)
 
-    # final detections and gt_bboxes are the same size and each index corresponds to the same object
-    return torch.stack(final_detections)
+        if iou_max > iou_threshold:
+            final_detections.append(bbox)
+            final_targets.append(gt_bboxes[iou_max_idx])
+            gt_bboxes = remove_by_index(gt_bboxes, iou_max_idx)
+    
+    return torch.stack(final_detections), torch.stack(final_targets)

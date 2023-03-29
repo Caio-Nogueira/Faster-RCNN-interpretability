@@ -13,18 +13,19 @@ model.to(device)
 
 model.eval()
 
-img, target = utils.pick_random_image(utils.train_dataset, seed=42)
+img, target = utils.pick_random_image(utils.train_dataset, seed=None)
 img = img[0].to(device)
 out = model(img.unsqueeze(0))
 utils.soft_nms(out)
 keep = utils.nms(out)
 
-detections = utils.assign_bbox(keep["boxes"], target[0]["boxes"])
-index = random.randint(0, detections.shape[0]) # get random element from detections 
+detections, boxes = utils.assign_bbox(keep, target[0]["boxes"])
+index = random.randint(0, detections.shape[0] - 1) # get random element from detections 
 pred_bbox = detections[index]
 target_bbox = target[0]["boxes"][index]
 
-print(target[0]["labels"][index])
+# print(target[0]["labels"][index])
+print(f"Scores: {keep['scores']}; index: {index}")
 
 copy_bbox = pred_bbox.clone().detach()
 contrastive = utils.translate_bbox(copy_bbox, np.array([[50,-50]]))
@@ -46,6 +47,8 @@ grads = grads.squeeze()
 
 weights = torch.mean(grads, dim=1) # global average pooling shape=(2048,)
 
+weights_positive = weights[weights > 0]
+print("Weights positive: ", weights_positive.shape)
 
 def compute_feature_maps(img):
     
@@ -59,7 +62,15 @@ def compute_feature_maps(img):
     img = body.layer1(img)
     img = body.layer2(img)
     img = body.layer3(img)
-    img = body.layer4(img)
+    # img = body.layer4(img)
+
+    img = body.layer4[0](img)
+    img = body.layer4[1](img)
+    img = body.layer4[2].conv1(img)
+    img = body.layer4[2].bn1(img)
+    img = body.layer4[2].conv2(img)
+    img = body.layer4[2].bn2(img)
+    img = body.layer4[2].conv3(img)
 
     return img
 
@@ -72,13 +83,19 @@ for i, w in enumerate(weights):
     cam += w * feature_maps[0, i, :, :]
 
 
-cam = torch.abs(cam) # all values are negative so we take the absolute value 
+# cam = torch.abs(cam) # !FIX grads point to the ascent of the loss function, so we take the absolute value
+
 cam = cv2.resize(cam.detach().numpy(), (img.shape[2], img.shape[1]))
 cam = np.maximum(cam, 0)
 cam = cam / cam.max()
 
-print(utils.average_cam(cam, pred_bbox))
-print(utils.average_cam(cam, contrastive))
+# print(img.shape, cam.shape)
+
+pred_avg_cam = utils.average_cam(cam, pred_bbox)
+contrastive_avg_cam = utils.average_cam(cam, contrastive)
+
+print(f"Average cam in predicted bbox: {pred_avg_cam}")
+print(f"Average cam in contrastive bbox: {contrastive_avg_cam}")
 
 img = np.array(img)
 
@@ -102,7 +119,7 @@ output = cv2.rectangle(output, (int(pred_bbox[0]), int(pred_bbox[1])), (int(pred
 contrastive = contrastive.squeeze()
 output = cv2.rectangle(output, (int(contrastive[0]), int(contrastive[1])), (int(contrastive[2]), int(contrastive[3])), (0, 255, 0), 2)
 
-cv2.imwrite("generated/grad_cam_interpretation3.jpg", output * 255)
+cv2.imwrite("generated/grad_cam_interpretation15.jpg", output * 255)
 
 # Display the output image
 cv2.imshow("Output", output)
