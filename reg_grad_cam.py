@@ -22,7 +22,7 @@ keep = utils.nms(out)
 detections, boxes = utils.assign_bbox(keep, target[0]["boxes"])
 index = random.randint(0, detections.shape[0] - 1) # get random element from detections 
 pred_bbox = detections[index]
-target_bbox = target[0]["boxes"][index]
+target_bbox = boxes[index]
 
 # print(target[0]["labels"][index])
 print(f"Scores: {keep['scores']}; index: {index}")
@@ -125,3 +125,4 @@ cv2.imwrite("generated/grad_cam_interpretation15.jpg", output * 255)
 cv2.imshow("Output", output)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
+
