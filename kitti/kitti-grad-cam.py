@@ -4,19 +4,25 @@ import utils
 import cv2
 import numpy as np
 import random
-from KittiDataset import KittiDataset
+from kitti_train.KittiDataset import KittiDataset
+import torch.nn.functional as F
+
+models_dict = {
+    "default_kitti": "models/fasterrcnn_kitti.pth",
+    "kitti_reg": "models/fasterrcnn_kitti_reg.pth"
+}
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = torchvision.models.detection.fasterrcnn_resnet50_fpn(num_classes=10)
-model.load_state_dict(torch.load("models/fasterrcnn_kitti.pth", map_location=device))
+model.load_state_dict(torch.load(models_dict["default_kitti"], map_location=device))
 model.to(device)
 
 model.eval()
 
 dataset = KittiDataset("/data/auto/kitti/object/training")
 
-seed = 2049
+seed = 5001
 img, target = dataset.pick_random_image(seed=seed)
 img.requires_grad = True
 out = model(img.unsqueeze(0))
@@ -25,7 +31,11 @@ out = model(img.unsqueeze(0))
 utils.soft_nms(out)
 keep = utils.nms(out)
 
+print(f"Prediction (after nms): {keep}")
+
 detections, boxes = utils.assign_bbox(keep, target["boxes"])
+
+random.seed(1)
 index = random.randint(0, detections.shape[0]-1) # get random element from detections 
 pred_bbox = detections[index]
 target_bbox = boxes[index]
@@ -152,6 +162,60 @@ def guided_backpropagation(img, pred_bbox, contrastive_bbox):
     return guided_grad
 
 
+
+def smooth_grad_cam(image, num_samples=10, stdev_spread=0.15):
+    """
+    Computes the SmoothGrad-CAM for a given input image and model.
+
+    Args:
+        image (torch.Tensor): the input image, with shape (3, H, W).
+        model (torch.nn.Module): the neural network model.
+        layer_name (str): the name of the layer to compute Grad-CAM for.
+        num_samples (int): the number of noisy samples to generate.
+        stdev_spread (float): the standard deviation of the Gaussian noise,
+            as a fraction of the dynamic range of the input image.
+
+    Returns:
+        torch.Tensor: the SmoothGrad-CAM heatmap, with shape (1, H', W').
+    """
+
+    # Compute the Grad-CAM for each noisy image
+    cam_sum = None
+    for i in range(num_samples):
+        # Add noise to the input image
+        range_value = torch.max(image) - torch.min(image)
+        noise = torch.randn_like(image) * range_value * stdev_spread
+        noisy_image = image + noise
+
+        # Compute the Grad-CAM for the noisy image
+        cam = compute_grad_CAM(pred_bbox, contrastive, model, noisy_image)
+
+        # Add the CAM to the sum
+        if cam_sum is None:
+            cam_sum = cam
+        else:
+            cam_sum += cam
+
+    # Average the CAM maps
+    cam_avg = cam_sum / num_samples
+
+    # Apply ReLU activation
+    # cam_avg = F.relu(cam_avg)
+
+    # Normalize the CAM
+    cam_avg = cam_avg - cam_avg.min()
+    cam_avg = cam_avg / cam_avg.max()
+
+    # Resize the CAM to the input image size
+    # cam_avg = F.interpolate(cam_avg, size=image.shape[-2:], mode="bilinear", align_corners=False)
+
+
+    return cam_avg
+
+
+smooth_grad = smooth_grad_cam(img.unsqueeze(0), num_samples=5, stdev_spread=0.15)
+# smooth_grad = smooth_grad.squeeze(0)
+
 cam = compute_grad_CAM(pred_bbox, contrastive, model, img.unsqueeze(0))
 guided_grad = guided_backpropagation(img, pred_bbox, contrastive)
 
@@ -176,6 +240,7 @@ img = img.permute(1, 2, 0).detach().cpu().numpy()
 output = interpretation_heatmap(guided_grad, img, pred_bbox, contrastive, f"generated/guided_grad{seed}.jpg")
 output4 = interpretation_heatmap(guided_grad, img, pred_bbox, contrastive, f"generated/guided_cam{seed}.jpg")
 output4 = interpretation_heatmap(cam, img, pred_bbox, contrastive, f"generated/cam{seed}.jpg")
+output = interpretation_heatmap(smooth_grad, img, pred_bbox, contrastive, f"generated/smooth_grad{seed}.jpg")
 
 
 # Display the output image
