@@ -5,3 +5,4 @@ single_object_dataset.pkl
 models/*
 test.py
 .vscode/*
+kitti/__pycache__/*

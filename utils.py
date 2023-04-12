@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torchvision.ops as ops
 from torchvision.ops import box_iou
-import pickle
+import cv2
 
 
 idx_to_label = {
@@ -284,6 +284,25 @@ def translate_bbox(bbox1, translation_vector):
 
     return bbox1
 
+def scale_bbox(bbox, scale_coef):
+    # contrastive = torch.zeros_like(bbox)
+
+    x_min, y_min, x_max, y_max = bbox[0], bbox[1], bbox[2], bbox[3]   
+    width = x_max - x_min
+    height = y_max - y_min
+    center_x = (x_min + x_max) / 2
+    center_y = (y_min + y_max) / 2
+    new_width = width * scale_coef
+    new_height = height * scale_coef
+    new_x_min = center_x - new_width / 2
+    new_y_min = center_y - new_height / 2
+    new_x_max = center_x + new_width / 2
+    new_y_max = center_y + new_height / 2
+    new_bbox = torch.tensor([new_x_min, new_y_min, new_x_max, new_y_max])
+    return new_bbox.unsqueeze(0)
+
+
+
 
 def average_cam(cam, bbox):
 
@@ -322,3 +341,31 @@ def assign_bbox(detections, gt_bboxes, iou_threshold=0.5):
             gt_bboxes = remove_by_index(gt_bboxes, iou_max_idx)
     
     return torch.stack(final_detections), torch.stack(final_targets)
+
+def interpretation_heatmap(cam, img, pred_bbox, contrastive, dest_file):
+    img = np.array(img)
+
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_RAINBOW)
+
+    t_heatmap = heatmap.astype(np.float32)
+    t_heatmap = t_heatmap / 255
+
+    # Overlay the heatmap on the input image
+    output = cv2.addWeighted(img, 0.5, t_heatmap, 0.5, 0)
+
+    if len(pred_bbox.shape) > 1:
+        pred_bbox = pred_bbox.squeeze(0)
+
+    output = cv2.rectangle(output, (int(pred_bbox[0]), int(pred_bbox[1])), (int(pred_bbox[2]), int(pred_bbox[3])), (0, 0, 255), 2)
+    contrastive = contrastive.squeeze()
+    output = cv2.rectangle(output, (int(contrastive[0]), int(contrastive[1])), (int(contrastive[2]), int(contrastive[3])), (0, 255, 0), 2)
+    cv2.imwrite(dest_file, output * 255)
+    return output
+
+def load_pretrained_model(model, pretrained_model_path, device):
+    model.load_state_dict(torch.load(pretrained_model_path, map_location=device))
+    return model
+
+

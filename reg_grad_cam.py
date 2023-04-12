@@ -11,44 +11,28 @@ model = torchvision.models.detection.fasterrcnn_resnet50_fpn(num_classes=21)
 model.load_state_dict(torch.load("models/fasterrcnn_10epochs.pth", map_location=device))
 model.to(device)
 
+
+seed = 42
 model.eval()
 
-img, target = utils.pick_random_image(utils.train_dataset, seed=None)
+img, target = utils.pick_random_image(utils.train_dataset, seed=seed)
 img = img[0].to(device)
+img.requires_grad = True
 out = model(img.unsqueeze(0))
 utils.soft_nms(out)
 keep = utils.nms(out)
 
 detections, boxes = utils.assign_bbox(keep, target[0]["boxes"])
-index = random.randint(0, detections.shape[0] - 1) # get random element from detections 
+index = random.randint(0, detections.shape[0] - 1) # get random element from detections
 pred_bbox = detections[index]
 target_bbox = boxes[index]
 
-# print(target[0]["labels"][index])
-print(f"Scores: {keep['scores']}; index: {index}")
 
 copy_bbox = pred_bbox.clone().detach()
-contrastive = utils.translate_bbox(copy_bbox, np.array([[50,-50]]))
-
-loss = utils.smooth_l1_loss(pred_bbox, contrastive) # since we are dealing with single object, we can just use the first box
-loss = loss.unsqueeze(0)
+# contrastive = utils.translate_bbox(copy_bbox, np.array([[50,-50]]))
+contrastive = utils.scale_bbox(copy_bbox, 1.25)
 
 
-# Compute the gradients of the output with respect to the last convolutional layer
-grads = torch.autograd.grad(
-    outputs=loss,
-    inputs=model.backbone.body.layer4[-1].conv3.weight, #last feature extraction conv layer
-    grad_outputs=torch.ones_like(loss),
-    create_graph=True,
-    retain_graph=True,
-)[0]
-
-grads = grads.squeeze()
-
-weights = torch.mean(grads, dim=1) # global average pooling shape=(2048,)
-
-weights_positive = weights[weights > 0]
-print("Weights positive: ", weights_positive.shape)
 
 def compute_feature_maps(img):
     
@@ -62,64 +46,113 @@ def compute_feature_maps(img):
     img = body.layer1(img)
     img = body.layer2(img)
     img = body.layer3(img)
-    # img = body.layer4(img)
-
-    img = body.layer4[0](img)
-    img = body.layer4[1](img)
-    img = body.layer4[2].conv1(img)
-    img = body.layer4[2].bn1(img)
-    img = body.layer4[2].conv2(img)
-    img = body.layer4[2].bn2(img)
-    img = body.layer4[2].conv3(img)
-
+    img = body.layer4(img)
+    
     return img
 
 
-feature_maps = compute_feature_maps(img) # (1, 2048, 12, 16)
+
+def compute_grad_CAM(pred_bbox, contrastive_bbox, model, img):
+    loss = utils.smooth_l1_loss(pred_bbox, contrastive_bbox) # since we are dealing with single object, we can just use the first box
+    loss = loss.unsqueeze(0)
+
+    # Compute the gradients of the output with respect to the last convolutional layer
+    grads = torch.autograd.grad(
+        outputs=loss,
+        inputs=model.backbone.body.layer4[-1].conv3.weight, #last feature extraction conv layer
+        grad_outputs=torch.ones_like(loss),
+        create_graph=True,
+        retain_graph=True,
+    )[0]
+
+    grads = grads.squeeze()
+
+    weights = torch.mean(grads, dim=1) # global average pooling shape=(2048,)
+
+    feature_maps = compute_feature_maps(img) # (1, 2048, 12, 16)
+
+    cam = torch.zeros(feature_maps.shape[-2:], dtype=torch.float32)
+    for i, w in enumerate(weights):
+        cam += w * feature_maps[0, i, :, :]
+
+    t_img = img.squeeze(0)
+    
+    cam_positive = cam[cam > 0]
+    print("CAM positives: ", cam_positive.shape)
+
+    cam_negative = cam[cam < 0]
+    print("CAM negatives: ", cam_negative.shape)
+
+    cam = cv2.resize(cam.detach().numpy(), (t_img.shape[2], t_img.shape[1]))
+    cam = np.maximum(cam, 0)
+    cam = cam / cam.max()
+
+    return cam
 
 
-cam = torch.zeros(feature_maps.shape[-2:], dtype=torch.float32)
-for i, w in enumerate(weights):
-    cam += w * feature_maps[0, i, :, :]
+def guided_backpropagation(img, pred_bbox, contrastive_bbox):    
+    
+    loss = utils.smooth_l1_loss(pred_bbox, contrastive_bbox)
+    loss = loss.unsqueeze(0)
+
+    # Compute the gradients of the output with respect to the input
+    grad = torch.autograd.grad(
+        outputs=loss,
+        inputs=img,
+        grad_outputs=torch.ones_like(loss),
+        create_graph=True,
+        retain_graph=True,
+    )[0]
+
+    loss.backward(retain_graph=True)
+    img_grad = img.grad
+
+    
+    img_grad_positive = img_grad[img_grad > 0]
+    print("Gradient positives: ", img_grad_positive.shape)
+
+    img_grad_negative = img_grad[img_grad < 0]
+    print("Gradient negatives: ", img_grad_negative.shape)
 
 
-# cam = torch.abs(cam) # !FIX grads point to the ascent of the loss function, so we take the absolute value
+    img_grad[img_grad < 0] = 0 # filter out negative gradients
 
-cam = cv2.resize(cam.detach().numpy(), (img.shape[2], img.shape[1]))
-cam = np.maximum(cam, 0)
-cam = cam / cam.max()
+    # Apply guided backpropagation by masking the negative gradients
+    guided_grad = img_grad * (grad > 0).float()
+    
+    # Normalize the gradients
+    guided_grad /= torch.max(torch.abs(guided_grad))
+    
+    # Convert the guided gradients to a numpy array
+    guided_grad = guided_grad.squeeze().detach().cpu().numpy()
+    return guided_grad
 
-# print(img.shape, cam.shape)
 
-pred_avg_cam = utils.average_cam(cam, pred_bbox)
-contrastive_avg_cam = utils.average_cam(cam, contrastive)
+cam = compute_grad_CAM(pred_bbox, contrastive, model, img.unsqueeze(0))
+guided_grad = guided_backpropagation(img, pred_bbox, contrastive)
 
-print(f"Average cam in predicted bbox: {pred_avg_cam}")
-print(f"Average cam in contrastive bbox: {contrastive_avg_cam}")
 
-img = np.array(img)
+def average_channels(t):
+    # Normalize the guided CAM and transform it into shape [:, :] by averaging the channels
+    
+    t = t / np.max(t)
+    t = np.transpose(t, (1, 2, 0))
+    t = np.mean(t, axis=2)
+    return t
 
-t_img = img.transpose((1, 2, 0))
 
-img = cv2.cvtColor(t_img, cv2.COLOR_RGB2BGR)
+# average_channels(guided_cam)
+guided_grad = average_channels(guided_grad)
 
-heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_RAINBOW)
+# Multiply the guided gradients with the computed CAM
+guided_cam = cam * guided_grad
 
-t_heatmap = heatmap.astype(np.float32)
-t_heatmap = t_heatmap / 255
+img = img.permute(1, 2, 0).detach().cpu().numpy()
 
-# Overlay the heatmap on the input image
-output = cv2.addWeighted(img, 0.5, t_heatmap, 0.5, 0)
+output = utils.interpretation_heatmap(guided_grad, img, pred_bbox, contrastive, f"generated/guided_grad{seed}.jpg")
+output4 = utils.interpretation_heatmap(guided_grad, img, pred_bbox, contrastive, f"generated/guided_cam{seed}.jpg")
+output4 = utils.interpretation_heatmap(cam, img, pred_bbox, contrastive, f"generated/cam{seed}.jpg")
 
-if len(pred_bbox.shape) > 1:
-    pred_bbox = pred_bbox.squeeze(0)
-
-output = cv2.rectangle(output, (int(pred_bbox[0]), int(pred_bbox[1])), (int(pred_bbox[2]), int(pred_bbox[3])), (0, 0, 255), 2)
-
-contrastive = contrastive.squeeze()
-output = cv2.rectangle(output, (int(contrastive[0]), int(contrastive[1])), (int(contrastive[2]), int(contrastive[3])), (0, 255, 0), 2)
-
-cv2.imwrite("generated/grad_cam_interpretation15.jpg", output * 255)
 
 # Display the output image
 cv2.imshow("Output", output)

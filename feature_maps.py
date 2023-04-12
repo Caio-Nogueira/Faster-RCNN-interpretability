@@ -1,26 +1,24 @@
 import torch
 import torchvision
 import cv2
+import utils
 import numpy as np
-from kitti.KittiDataset import KittiDataset
 import matplotlib.pyplot as plt
 from torchvision.transforms.functional import to_pil_image
 import torchvision.transforms.functional as F
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = torchvision.models.detection.fasterrcnn_resnet50_fpn(num_classes=10)
-model.load_state_dict(torch.load("models/fasterrcnn_kitti.pth", map_location=device))
+model = torchvision.models.detection.fasterrcnn_resnet50_fpn(num_classes=21)
+model.load_state_dict(torch.load("models/fasterrcnn_10epochs.pth", map_location=device))
 model.to(device)
 
 model.eval()
 
-dataset = KittiDataset("/data/auto/kitti/object/training")
-
 seed = 2049
-img, target = dataset.pick_random_image(seed=seed)
-img.requires_grad = True
-out = model(img.unsqueeze(0))
+
+img, target = utils.pick_random_image(utils.train_dataset, seed=seed)
+img = img[0]
 
 
 layers = [model.backbone.body.layer1, model.backbone.body.layer2, model.backbone.body.layer3, model.backbone.body.layer4]
@@ -56,11 +54,16 @@ feature_maps = []
 for i in range(4):
     tensor = compute_feature_maps(img.unsqueeze(0), i)
     tensor = transform_feature_map(tensor)
-    
+    print(f"Feature map {i} mean: {tensor.mean()}")
     feature_maps.append(tensor)
 
+# tensor = compute_feature_maps(img.unsqueeze(0), 3)
+# tensor = transform_feature_map(tensor)
 
-grid = torchvision.utils.make_grid(feature_maps, nrow=4, padding=0, normalize=False, range=None, scale_each=False, pad_value=0)
+# feature_maps.append(tensor)
+
+
+grid = torchvision.utils.make_grid(feature_maps, nrow=1, padding=0, normalize=True, range=None, scale_each=False, pad_value=0)
 
 def show(imgs):
     if not isinstance(imgs, list):
@@ -69,7 +72,7 @@ def show(imgs):
     for i, img in enumerate(imgs):
         img = img.detach()
         img = F.to_pil_image(img)
-        axs[0, i].imshow(np.asarray(img))
+        axs[0, i].imshow(np.asarray(img), cmap="viridis")
         axs[0, i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
 
     #save image as png
