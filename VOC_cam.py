@@ -12,7 +12,7 @@ model.load_state_dict(torch.load("models/fasterrcnn_10epochs.pth", map_location=
 model.to(device)
 
 
-seed = 42
+seed = 2
 model.eval()
 
 img, target = utils.pick_random_image(utils.train_dataset, seed=seed)
@@ -60,10 +60,12 @@ def compute_feature_maps(img, layer_num=None):
     return img
 
 
+
+
 def compute_grad_CAM(pred_bbox, contrastive_bbox, img, layer=None, layer_num=None):
     loss = utils.smooth_l1_loss(pred_bbox, contrastive_bbox) # since we are dealing with single object, we can just use the first box
     loss = loss.unsqueeze(0)
-    layer.requires_grad = True
+    # loss.requires_grad = True
 
 
     # Compute the gradients of the output with respect to the last convolutional layer
@@ -79,9 +81,9 @@ def compute_grad_CAM(pred_bbox, contrastive_bbox, img, layer=None, layer_num=Non
 
     weights = torch.mean(grads, dim=1) # global average pooling shape=(2048,)
 
-    masked_image = mask_image(img.squeeze(0), pred_bbox, contrastive_bbox)
+    # masked_image = mask_image(img.squeeze(0), pred_bbox, contrastive_bbox)
 
-    feature_maps = compute_feature_maps(masked_image, layer_num) # (1, 2048, 12, 16)
+    feature_maps = compute_feature_maps(img, layer_num) # (1, 2048, 12, 16)
 
     cam = torch.zeros(feature_maps.shape[-2:], dtype=torch.float32)
     for i, w in enumerate(weights):
@@ -106,6 +108,61 @@ cam3 = compute_grad_CAM(pred_bbox, target_bbox, img.unsqueeze(0), layer=model.ba
 cam4 = compute_grad_CAM(pred_bbox, contrastive, img.unsqueeze(0), layer=model.backbone.body.layer4[-1].conv3.weight, layer_num=4)
 
 
+def smooth_grad_cam(image, num_samples=10, stdev_spread=0.15):
+    """
+    Computes the SmoothGrad-CAM for a given input image and model.
+
+    Args:
+        image (torch.Tensor): the input image, with shape (3, H, W).
+        model (torch.nn.Module): the neural network model.
+        layer_name (str): the name of the layer to compute Grad-CAM for.
+        num_samples (int): the number of noisy samples to generate.
+        stdev_spread (float): the standard deviation of the Gaussian noise,
+            as a fraction of the dynamic range of the input image.
+
+    Returns:
+        torch.Tensor: the SmoothGrad-CAM heatmap, with shape (1, H', W').
+    """
+
+    # Compute the Grad-CAM for each noisy image
+    cam_sum = None
+
+    layer = model.backbone.body.layer4[-1].conv3.weight
+    layer_num = 4
+    for i in range(num_samples):
+        # Add noise to the input image
+        range_value = torch.max(image) - torch.min(image)
+        noise = torch.randn_like(image) * range_value * stdev_spread
+        noisy_image = image + noise
+
+        # Compute the Grad-CAM for the noisy image
+        cam = compute_grad_CAM(pred_bbox, contrastive, noisy_image, layer, layer_num)
+
+        # Add the CAM to the sum
+        if cam_sum is None:
+            cam_sum = cam
+        else:
+            cam_sum += cam
+
+    # Average the CAM maps
+    cam_avg = cam_sum / num_samples
+
+    # Apply ReLU activation
+    # cam_avg = F.relu(cam_avg)
+
+    # Normalize the CAM
+    cam_avg = cam_avg - cam_avg.min()
+    cam_avg = cam_avg / cam_avg.max()
+
+    # Resize the CAM to the input image size
+    # cam_avg = F.interpolate(cam_avg, size=image.shape[-2:], mode="bilinear", align_corners=False)
+
+
+    return cam_avg
+
+smoothGrad = smooth_grad_cam(img.unsqueeze(0), num_samples=10, stdev_spread=0.15)
+
+
 img = img.permute(1, 2, 0).detach().cpu().numpy()
 
 
@@ -115,15 +172,18 @@ output = utils.interpretation_heatmap(cam4, img, pred_bbox, contrastive, f"gener
 
 final_cam = (cam2 + cam3 + cam4) / 3
 
-pred_bbox = pred_bbox.detach().cpu().numpy().astype(np.int32)
-contrastive = contrastive.detach().cpu().numpy().squeeze(0).astype(np.int32)
 
-# mask regions out of both bounding boxes
-binary_mask = np.zeros_like(final_cam)
-binary_mask[pred_bbox[1]:pred_bbox[3], pred_bbox[0]:pred_bbox[2]] = 1
-binary_mask[contrastive[1]:contrastive[3], contrastive[0]:contrastive[2]] = 1
+# pred_bbox = pred_bbox.detach().cpu().numpy().astype(np.int32)
+# contrastive = contrastive.detach().cpu().numpy().squeeze(0).astype(np.int32)
 
-final_cam = final_cam * binary_mask
+# # mask regions out of both bounding boxes
+# binary_mask = np.zeros_like(final_cam)
+# binary_mask[pred_bbox[1]:pred_bbox[3], pred_bbox[0]:pred_bbox[2]] = 1
+# binary_mask[contrastive[1]:contrastive[3], contrastive[0]:contrastive[2]] = 1
+
+# final_cam = final_cam * binary_mask
 
 
+
+output = utils.interpretation_heatmap(smoothGrad, img, pred_bbox, contrastive, f"generated/global_gradCAM/smoothgrad{seed}.jpg")
 output = utils.interpretation_heatmap(final_cam, img, pred_bbox, contrastive, f"generated/global_gradCAM/cam_final_{seed}.jpg")

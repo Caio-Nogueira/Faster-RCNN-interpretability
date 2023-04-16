@@ -55,6 +55,7 @@ def compute_feature_maps(img):
 def compute_grad_CAM(pred_bbox, contrastive_bbox, model, img):
     loss = utils.smooth_l1_loss(pred_bbox, contrastive_bbox) # since we are dealing with single object, we can just use the first box
     loss = loss.unsqueeze(0)
+    loss.requires_grad = True
 
     # Compute the gradients of the output with respect to the last convolutional layer
     grads = torch.autograd.grad(
@@ -67,7 +68,7 @@ def compute_grad_CAM(pred_bbox, contrastive_bbox, model, img):
 
     grads = grads.squeeze()
 
-    weights = torch.mean(grads, dim=1) # global average pooling shape=(2048,)
+    weights = torch.mean(grads, dim=1) # global average pooling
 
     feature_maps = compute_feature_maps(img) # (1, 2048, 12, 16)
 
@@ -150,7 +151,7 @@ guided_cam = cam * guided_grad
 img = img.permute(1, 2, 0).detach().cpu().numpy()
 
 output = utils.interpretation_heatmap(guided_grad, img, pred_bbox, contrastive, f"generated/guided_grad{seed}.jpg")
-output4 = utils.interpretation_heatmap(guided_grad, img, pred_bbox, contrastive, f"generated/guided_cam{seed}.jpg")
+output4 = utils.interpretation_heatmap(guided_cam, img, pred_bbox, contrastive, f"generated/guided_cam{seed}.jpg")
 output4 = utils.interpretation_heatmap(cam, img, pred_bbox, contrastive, f"generated/cam{seed}.jpg")
 
 
