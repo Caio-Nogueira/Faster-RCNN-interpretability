@@ -29,8 +29,9 @@ target_bbox = boxes[index]
 
 
 copy_bbox = pred_bbox.clone().detach()
-# contrastive = utils.translate_bbox(copy_bbox, np.array([[50,-50]]))
-contrastive = utils.scale_bbox(copy_bbox, 1.25)
+translate_vector = utils.obtain_translation_vector(img, horizontal=False)
+contrastive = utils.translate_bbox(copy_bbox, translate_vector)
+# contrastive = utils.scale_bbox(copy_bbox, 1.25)
 
 
 
@@ -55,7 +56,7 @@ def compute_feature_maps(img):
 def compute_grad_CAM(pred_bbox, contrastive_bbox, model, img):
     loss = utils.smooth_l1_loss(pred_bbox, contrastive_bbox) # since we are dealing with single object, we can just use the first box
     loss = loss.unsqueeze(0)
-    loss.requires_grad = True
+    # loss.requires_grad = True
 
     # Compute the gradients of the output with respect to the last convolutional layer
     grads = torch.autograd.grad(

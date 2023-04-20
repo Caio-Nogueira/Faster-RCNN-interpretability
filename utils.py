@@ -181,8 +181,8 @@ def soft_nms(pred, threshold=0.3, sigma=0.5, method='linear'):
 
 
 def remove_by_index(tensor, indices): #remove an element by index in a tensor
-
-    indices_to_keep = torch.as_tensor([i for i in range(tensor.size(0)) if i not in indices], dtype=torch.int64)
+    device = tensor.device
+    indices_to_keep = torch.as_tensor([i for i in range(tensor.size(0)) if i not in indices], dtype=torch.int64, device=device)
     return torch.index_select(tensor, 0, indices_to_keep)
 
 
@@ -267,6 +267,17 @@ def smooth_l1_loss(bbox_pred, bbox_target, beta=1.0):
 
 def MSEloss(bbox1, bbox2):
     return torch.mean((bbox1 - bbox2)**2)
+
+def obtain_translation_vector(img, horizontal=True):
+    if img.shape[0] == 3:
+        img = img.permute(1, 2, 0)
+    height = img.shape[0]
+    width = img.shape[1]
+
+    if horizontal:
+        return np.array([[width*0.2, 0]])
+    
+    return np.array([[0, height*0.2]])
 
 
 
