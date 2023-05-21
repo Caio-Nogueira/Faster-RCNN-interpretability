@@ -9,13 +9,12 @@ import matplotlib.pyplot as plt
 import random
 from torchvision.transforms.functional import to_pil_image
 from matplotlib.patches import Rectangle
-from torchvision.datasets import VOCDetection
 from torchvision.transforms import ToTensor, RandomCrop, Compose, Resize, Normalize
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torchvision.ops as ops
 from torchvision.ops import box_iou
-import math
+import pickle
 import cv2
 
 
@@ -73,14 +72,6 @@ def collate_fn(batch):
     return images, targets
 
 
-
-train_dataset = torchvision.datasets.VOCDetection(
-    root="./data", year="2012", image_set="train",
-    download=False, transform=ToTensor())
-
-val_dataset = torchvision.datasets.VOCDetection(
-    root="./data", year="2012", image_set="val",
-    download=False, transform=ToTensor())
 
 def pick_random_image(data, seed=None):
     if seed != None:
@@ -333,6 +324,33 @@ def assign_bbox(detections, gt_bboxes, iou_threshold=0.5):
     return torch.stack(final_detections), torch.stack(final_targets)
 
 
+def interpretation_heatmap(cam, img, pred_bbox, dest_file, contrastive=None):
+
+    img = img.permute(1, 2, 0).detach().cpu().numpy()
+    img = np.array(img)
+
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+
+    t_heatmap = heatmap.astype(np.float32)
+    t_heatmap = t_heatmap / 255
+
+    # Overlay the heatmap on the input image
+    output = cv2.addWeighted(img, 0.5, t_heatmap, 0.5, 0)
+
+    if len(pred_bbox.shape) > 1:
+        pred_bbox = pred_bbox.squeeze(0)
+
+    output = cv2.rectangle(output, (int(pred_bbox[0]), int(pred_bbox[1])), (int(pred_bbox[2]), int(pred_bbox[3])), (0, 0, 255), 2)
+    
+    if contrastive != None:
+        contrastive = contrastive.squeeze()
+        output = cv2.rectangle(output, (int(contrastive[0]), int(contrastive[1])), (int(contrastive[2]), int(contrastive[3])), (0, 255, 0), 2)
+    cv2.imwrite(dest_file, output * 255)
+    return output
+
+
 def validate_one_epoch(test_loader, device, model):
     model.train()
     loss = 0
@@ -363,20 +381,12 @@ def compute_feature_maps(img, model):
 
 
 
-def compute_grad_CAM(pred_bbox, contrastive_bbox, model, img, contrastive=True):
+def compute_grad_CAM(img, outputs, model):
 
-
-    out = smooth_l1_loss(pred_bbox, contrastive_bbox) # since we are dealing with single object, we can just use the first box
-    out = out.unsqueeze(0)
-
-    if not contrastive:
-        out = calculate_distance(pred_bbox)
-
-    # Compute the gradients of the output with respect to the last convolutional layer
     grads = torch.autograd.grad(
-        outputs=out,
+        outputs=outputs,
         inputs=model.backbone.body.layer4[-1].conv3.weight, #last feature extraction conv layer
-        grad_outputs=torch.ones_like(out),
+        grad_outputs=torch.ones_like(outputs),
         create_graph=True,
         retain_graph=True,
     )[0]
@@ -455,24 +465,19 @@ def smooth_grad_cam(pred_bbox, contrastive_bbox, model, image, num_samples=10, s
     return cam_avg
 
 
-def guided_backpropagation(img, pred_bbox, contrastive_bbox, contrastive=True):    
+def guided_backpropagation(img, outputs):    
     
-    out = smooth_l1_loss(pred_bbox, contrastive_bbox) # since we are dealing with single object, we can just use the first box
-    out = out.unsqueeze(0)
-
-    if not contrastive:
-        out = calculate_distance(pred_bbox)
 
     # Compute the gradients of the output with respect to the input
     grad = torch.autograd.grad(
-        outputs=out,
+        outputs=outputs,
         inputs=img,
-        grad_outputs=torch.ones_like(out),
+        grad_outputs=torch.ones_like(outputs),
         create_graph=True,
         retain_graph=True,
     )[0]
 
-    out.backward(retain_graph=True)
+    outputs.backward(retain_graph=True)
     img_grad = img.grad
 
     
@@ -496,51 +501,12 @@ def guided_backpropagation(img, pred_bbox, contrastive_bbox, contrastive=True):
     return guided_grad
 
 
-def interpretation_heatmap(cam, img, pred_bbox, contrastive, dest_file):
-    img = np.array(img)
-
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
-
-    t_heatmap = heatmap.astype(np.float32)
-    t_heatmap = t_heatmap / 255
-
-    # Overlay the heatmap on the input image
-    output = cv2.addWeighted(img, 0.5, t_heatmap, 0.5, 0)
-
-    if len(pred_bbox.shape) > 1:
-        pred_bbox = pred_bbox.squeeze(0)
-
-    output = cv2.rectangle(output, (int(pred_bbox[0]), int(pred_bbox[1])), (int(pred_bbox[2]), int(pred_bbox[3])), (0, 0, 255), 2)
-    
-    if contrastive != None:
-        contrastive = contrastive.squeeze()
-        output = cv2.rectangle(output, (int(contrastive[0]), int(contrastive[1])), (int(contrastive[2]), int(contrastive[3])), (0, 255, 0), 2)
-    cv2.imwrite(dest_file, output * 255)
-    return output
-
-
-
 def calculate_slope(pred_bbox):
     xmin, ymin, xmax, ymax = pred_bbox.squeeze(0)
     slope = (ymax - ymin) / (xmax - xmin)
     return slope
 
-
-
 def calculate_distance(pred_bbox):
     xmin, ymin, xmax, ymax = pred_bbox.squeeze(0)
     distance = torch.sqrt(torch.pow(xmax - xmin, 2) + torch.pow(ymax - ymin, 2))
     return distance
-
-
-def calculate_horizontal_distance(pred_bbox):
-    xmin, ymin, xmax, ymax = pred_bbox.squeeze(0)
-    distance = torch.abs(xmax - xmin)
-    return distance
-
-def calculate_area(bbox):
-    xmin, ymin, xmax, ymax = bbox.squeeze(0)
-    area = torch.abs(xmax - xmin) * torch.abs(ymax - ymin)
-    return area

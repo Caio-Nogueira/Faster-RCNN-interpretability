@@ -6,3 +6,6 @@ models/*
 test.py
 .vscode/*
 kitti/__pycache__/*
+*.pth
+generated/*
+*.jpg
